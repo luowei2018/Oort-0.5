@@ -31,6 +31,7 @@ class _training_selector(object):
         self.successful_clients = set()
         self.blacklist = None
 
+    # Register new client or update client utility
     def update_client(self, id, feedbacks):
         if id not in self.nodes:
             self.nodes[id] = {
@@ -70,6 +71,7 @@ class _training_selector(object):
 
         return explorationRes, exploitationRes
 
+    # Update threshold to smooth the training pace
     def pacer(self):
         step = self.args.pacer_step
         delta = self.args.pacer_delta
@@ -85,7 +87,7 @@ class _training_selector(object):
 
             reward_change = abs(curr_round_reward - last_round_reward)
             # change too sharp
-            if reward_change >= 6 * last_round_reward: # change 5 to 8
+            if reward_change >= 6 * last_round_reward:
                 self.threshold = max(delta, self.threshold - delta)
             # change too flat
             elif reward_change <= 0.15 * last_round_reward:
@@ -97,6 +99,7 @@ class _training_selector(object):
         logging.info("Training selector: avgExploitationRewards {}, avgExplorationRewards {}".
                         format(avgExploitationRewards, avgExplorationRewards))
 
+    # Set clients blacklist and roll back when there are not enough available clients
     def set_blacklist(self):
         roundsNum = self.args.blacklist_rounds
         if roundsNum == -1:
@@ -117,14 +120,17 @@ class _training_selector(object):
         if len(bl) > bl_threshold:
             self.blacklist = set(bl[:bl_threshold ])
 
-
+    # Run selection algorithem to choose the optimal participants
     def select_client(self, num_clients, avail_clients=None):
         if avail_clients != None:
             clients = avail_clients
         else:
             clients = set([x for x in self.nodes.keys() if self.nodes[x]['status']] == True)
 
-        return self.getTopK_PF(num_clients, self.round+1, clients)
+        return self.get_optimal_clients(num_clients, self.round+1, clients)
+
+    def get_clients(self):
+        return self.nodes
 
     def update_duration(self, clientId, duration):
         if clientId in self.nodes:
@@ -137,9 +143,7 @@ class _training_selector(object):
 
         return 0
 
-    def get_clients(self):
-        return self.nodes
-
+    # Normalize reward/staleness data
     def normalize(self, data, clip_bound=0.96, threshold=1e-4):
         data.sort()
         _min = float(data[0])
@@ -150,7 +154,8 @@ class _training_selector(object):
 
         return _max, _min, _range, _avg, _clip_val
 
-    def getTopK(self, numOfSamples, cur_time, feasible_clients):
+    # Selection algorithem
+    def get_optimal_clients(self, numOfSamples, cur_time, feasible_clients):
         self.round = cur_time
         self.set_blacklist()
         self.pacer()
@@ -178,123 +183,15 @@ class _training_selector(object):
             self.prefer_duration = float('inf')
 
         for key in orderedKeys:
-            # we have played this arm before
+            # the client has been selected before
             if self.nodes[key]['count'] > 0:
                 clientDuration = self.nodes[key]['duration']
                 creward = min(self.nodes[key]['reward'], clip_value)
                 numExploited += 1
 
+                # temporal uncertainty
                 sc = (creward - min_reward)/range_reward \
-                    + math.sqrt(0.1*math.log(cur_time)/self.nodes[key]['time_stamp']) # temporal uncertainty
-
-                if clientDuration > self.prefer_duration:
-                    sc *= ((self.prefer_duration/max(1e-4, clientDuration)) ** self.args.round_penalty)
-
-                if self.nodes[key]['time_stamp']==cur_time:
-                    allloss[key] = sc
-
-                scores[key] = abs(sc)
-
-        clientLakes = list(scores.keys())
-        self.explore_factor = max(self.explore_factor*self.decay_factor, self.explore_min)
-        explorationLen = int(numOfSamples*self.explore_factor)
-
-        # exploitation
-        exploitLen = min(numOfSamples-explorationLen, len(clientLakes))
-
-        # take the top-k, and then sample by probability, take 95% of the cut-off loss
-        sortedClientUtil = sorted(scores, key=scores.get, reverse=True)
-
-        # take cut-off utility
-        cut_off_util = scores[sortedClientUtil[exploitLen]] * self.args.cut_off_util
-
-        tempPickedClients = []
-        for clientId in sortedClientUtil:
-            # we want at least 10 times of clients for augmentation
-            if scores[clientId] < cut_off_util and len(tempPickedClients) > 15.*exploitLen: # change 10 to 15
-                break
-            tempPickedClients.append(clientId)
-
-        augment_factor = len(tempPickedClients)
-
-        totalSc = max(1e-4, float(sum([scores[key] for key in tempPickedClients])))
-        self.exploit = list(np2.random.choice(tempPickedClients, exploitLen, p=[scores[key]/totalSc for key in tempPickedClients], replace=False))
-
-        pickedClients = []
-
-        # exploration
-        _unexplored = [x for x in list(self.unexplored) if int(x) in feasible_clients]
-        if len(_unexplored) > 0:
-            init_reward = {}
-            for cl in _unexplored:
-                init_reward[cl] = self.nodes[cl]['reward']
-                clientDuration = self.nodes[cl]['duration']
-
-                if clientDuration > self.prefer_duration:
-                    init_reward[cl] *= ((float(self.prefer_duration)/max(1e-4, clientDuration)) ** self.args.round_penalty)
-
-            # prioritize w/ some rewards (i.e., size)
-            exploreLen = min(len(_unexplored), numOfSamples-len(self.exploit))
-            pickedUnexploredClients = sorted(init_reward, key=init_reward.get, reverse=True)[:min(int(self.sample_window*exploreLen), len(init_reward))]
-
-            unexploredSc = float(sum([init_reward[key] for key in pickedUnexploredClients]))
-
-            pickedUnexplored = list(np2.random.choice(pickedUnexploredClients, exploreLen,
-                            p=[init_reward[key]/max(1e-4, unexploredSc) for key in pickedUnexploredClients], replace=False))
-
-            self.explore = pickedUnexplored
-
-
-        pickedClients = self.explore + self.exploit
-        top_k_score = []
-        for i in range(min(3, len(pickedClients))):
-            clientId = pickedClients[i]
-            _score = (self.nodes[clientId]['reward'] - min_reward)/range_reward
-            _staleness = self.alpha*((cur_time-self.nodes[clientId]['time_stamp']) - min_staleness)/float(range_staleness) #math.sqrt(0.1*math.log(cur_time)/max(1e-4, self.nodes[clientId]['time_stamp']))
-            top_k_score.append((self.nodes[clientId], [_score, _staleness]))
-
-        logging.info("At round {}, UCB exploited {}, augment_factor {}, exploreLen {}, un-explored {}, exploration {}, round_threshold {}, sampled score is {}"
-            .format(cur_time, numExploited, augment_factor/max(1e-4, exploitLen), exploreLen, len(self.unexplored), self.explore_factor, self.threshold, top_k_score))
-        logging.info("At time {}, all rewards are {}".format(cur_time, allloss))
-
-        return pickedClients
-
-    def getTopK_PF(self, numOfSamples, cur_time, feasible_clients):
-        self.round = cur_time
-        self.set_blacklist()
-        self.pacer()
-        orderedKeys = []
-        if feasible_clients != None:
-            orderedKeys = [x for x in list(feasible_clients) if x not in self.blacklist] # Does feasible_clients stores clientId (int)?
-
-        # normalize the score of all arms: Avg + Confidence
-        scores, numExploited, exploreLen = {}, 0, 0
-        moving_reward, staleness, allloss = [], [], {}
-
-        for clientId in orderedKeys:
-            if self.nodes[clientId]['reward'] <= 0:
-                continue
-            moving_reward.append(self.nodes[clientId]['reward'])
-            staleness.append(cur_time - self.nodes[clientId]['time_stamp'])
-
-        max_reward, min_reward, range_reward, avg_reward, clip_value = self.normalize(moving_reward, self.args.clip_bound)
-        max_staleness, min_staleness, range_staleness, avg_staleness, _ = self.normalize(staleness, threshold=1)
-
-        if self.threshold < 100.:
-            sortedDuration = sorted([self.nodes[clientId]['duration'] for clientId in list(self.nodes.keys())])
-            self.prefer_duration = sortedDuration[min(int(len(sortedDuration) * self.threshold/100.), len(sortedDuration)-1)]
-        else:
-            self.prefer_duration = float('inf')
-
-        for key in orderedKeys:
-            # we have played this arm before
-            if self.nodes[key]['count'] > 0:
-                clientDuration = self.nodes[key]['duration']
-                creward = min(self.nodes[key]['reward'], clip_value)
-                numExploited += 1
-
-                sc = (creward - min_reward)/range_reward \
-                    + math.sqrt(0.1*math.log(cur_time)/self.nodes[key]['time_stamp']) # temporal uncertainty
+                    + math.sqrt(0.1*math.log(cur_time)/self.nodes[key]['time_stamp'])
 
                 if clientDuration > self.prefer_duration:
                     sc *= ((self.prefer_duration/max(1e-4, clientDuration)) ** self.args.round_penalty)
@@ -377,7 +274,7 @@ class _training_selector(object):
 
         remain_picked = getTopK(numOfSamples - len(pareto_list), self.training_round, _unexplored)
 
-        #pareto: 
+        #pareto:
         #ickedClients = pareto_list + remain_picked
         #original:
         pickedClients = self.explore + self.exploit

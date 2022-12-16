@@ -24,3 +24,6 @@ class _testing_selector:
         selected_clients = numpy.random.choice(self.client_ids, replacement=False, size=num)
         return selected_clients
 
+    # TODO
+    def select_by_category(self):
+        pass
