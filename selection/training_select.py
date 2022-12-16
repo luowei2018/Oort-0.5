@@ -124,7 +124,7 @@ class _training_selector(object):
         else:
             clients = set([x for x in self.nodes.keys() if self.nodes[x]['status']] == True)
 
-        return self.getTopK(num_clients, self.round+1, clients)
+        return self.getTopK_PF(num_clients, self.round+1, clients)
 
     def update_duration(self, clientId, duration):
         if clientId in self.nodes:
