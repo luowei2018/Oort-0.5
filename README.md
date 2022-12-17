@@ -53,7 +53,7 @@ Then, run the experiment with ```federated driver start benchmark/configs/[confi
 
 # Plot figures
 
-TODO
+Use ploort.py to create graphs regarding performance evaluations.
 
 # Citation
 ```bibtex
