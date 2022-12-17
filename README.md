@@ -46,7 +46,7 @@ bash download.sh download [dataset_name]
 
 # Run Experiments
 First, create a configuration file and put it to ```Oort/benchmark/configs```.
-Then, run the experiment with ```fedscale driver start benchmark/configs/[config.yml]``` under ```Oort/``` directory.
+Then, run the experiment with ```federated driver start benchmark/configs/[config.yml]``` under ```Oort/``` directory.
 
 # Plot figures
 
