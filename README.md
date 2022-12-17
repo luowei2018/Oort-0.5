@@ -38,6 +38,9 @@ Repo Root
 ```
 
 # Download Datasets
+
+The datasets are available to download using the following commands:
+
 ```
 git clone https://github.com/luowei2018/Oort-0.5.git
 cd Oort/benchmark/dataset
@@ -52,6 +55,7 @@ Then, run the experiment with ```fedscale driver start benchmark/configs/[config
 
 TODO
 
+# Citation
 ```bibtex
 @inproceedings{Oort-osdi21,
   title={Efficient Federated Learning via Guided Participant Selection},
